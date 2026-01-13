@@ -13,11 +13,12 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class AddPetPage(QWidget):
-    def __init__(self, go_back):
+    def __init__(self, go_back, go_to_camera):
         super().__init__()
         self.go_back = go_back
         self.image_path = None
         self.user_id = None
+        self.go_to_camera = go_to_camera
 
         # -------- Container (card) --------
         container = QWidget()
@@ -46,7 +47,9 @@ class AddPetPage(QWidget):
                 text-decoration: underline;
             }
         """)
+        back_btn.clicked.connect(self.delete_captured_image)
         back_btn.clicked.connect(self.go_back)
+        back_btn.clicked.connect(lambda: self.image_preview.clear())
         top_bar.addWidget(back_btn)
         top_bar.addStretch()
 
@@ -118,6 +121,22 @@ class AddPetPage(QWidget):
                 background-color: #E0F0FF;
             }
         """)
+
+        capture_btn = QPushButton("Capture Image")
+        capture_btn.setFixedHeight(40)
+        capture_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #0d53bb;
+                color: white;
+                border: none;
+                border-radius: 10px;
+                font-weight: bold;
+            }
+            QPushButton:hover {
+                background-color: #0F78D1;
+            }
+        """)
+        capture_btn.clicked.connect(self.go_to_camera)
         upload_btn.clicked.connect(self.select_image)
 
         # -------- Submit Button --------
@@ -153,7 +172,13 @@ class AddPetPage(QWidget):
         form_layout.addWidget(self.pet_age)
         form_layout.addWidget(self.pet_breed)
         form_layout.addWidget(self.image_preview)
-        form_layout.addWidget(upload_btn)
+        image_btn_layout = QHBoxLayout()
+        image_btn_layout.setSpacing(10)
+        image_btn_layout.addWidget(upload_btn)
+        image_btn_layout.addWidget(capture_btn)
+
+        form_layout.addLayout(image_btn_layout)
+
         form_layout.addWidget(submit_btn)
         form_layout.addWidget(self.error_label)
 
@@ -238,12 +263,39 @@ class AddPetPage(QWidget):
                 self.image_preview.clear()
                 self.error_label.setStyleSheet("color: green; font-size: 12px; font-weight: bold;")
                 self.error_label.setText("Pet registered successfully!")
+                
+                
                 QTimer.singleShot(2000, self.go_back)
                 self.error_label.setText("")
             else:
                 self.error_label.setStyleSheet("color: red; font-size: 12px; font-weight: bold;")
                 self.error_label.setText(response.json().get("message", "Error registering pet"))
-
+                self.delete_captured_image()
         except Exception as e:
             self.error_label.setStyleSheet("color: red; font-size: 12px; font-weight: bold;")
             self.error_label.setText(f"Backend not reachable: {e}")
+
+    def load_captured_image(self):
+        capture_path = Path(str(BASE_DIR / "captured_images" / "capture.jpg"))
+        if capture_path.exists():
+            self.image_path = str(capture_path)
+
+            pixmap = QPixmap(str(capture_path))
+            pixmap = pixmap.scaled(
+                self.image_preview.width(),
+                self.image_preview.height(),
+                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.TransformationMode.SmoothTransformation
+            )
+            self.image_preview.setPixmap(pixmap)
+            self.image_preview.setText("")
+
+    def delete_captured_image(self):
+        capture_path = Path(str(BASE_DIR / "captured_images" / "capture.jpg"))
+        if capture_path.exists():
+            try:
+                capture_path.unlink()
+            except Exception as e:
+                print(f"Failed to delete captured image: {e}")
+    
+    

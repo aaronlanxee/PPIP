@@ -24,6 +24,7 @@ CREATE TABLE IF NOT EXISTS pets (
     age INTEGER,
     breed TEXT,
     image BLOB,
+    missing_location TEXT DEFAULT NULL,
     FOREIGN KEY (user_id) REFERENCES users(id)
 )
 """)

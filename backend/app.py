@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
-import sqlite3, hashlib, random
+import sqlite3, hashlib, random, json, base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from helpers import hash_password, get_user_by_email, get_user_by_username, send_otp_email
+from helpers import hash_password, get_user_by_email, get_user_by_username, send_otp_email, send_email
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
@@ -13,7 +13,7 @@ DB_PATH = Path(__file__).parent / "ppip.db"
 
 
 otp_store = {}
-
+    
 @app.route('/api/register', methods=['POST'])
 def register():
     data = request.json
@@ -184,15 +184,43 @@ def api_get_user(user_id):
 
 @app.route("/api/pet/<int:pet_id>/mark_missing", methods=["POST"])
 def mark_pet_missing(pet_id):
+    """
+    Expects JSON data in POST body:
+    {
+        "missing_location": [lat, lng]  # a list of two floats
+    }
+    """
     try:
+        data = request.get_json()
+        if not data or "missing_location" not in data:
+            return jsonify({
+                "success": False,
+                "message": "Missing 'missing_location' in request"
+            }), 400
+
+        missing_location = data["missing_location"]
+
+        # Validate it's a list of 2 numbers
+        if (not isinstance(missing_location, list) 
+            or len(missing_location) != 2 
+            or not all(isinstance(x, (int, float)) for x in missing_location)):
+            return jsonify({
+                "success": False,
+                "message": "'missing_location' must be a list of 2 numbers [lat, lng]"
+            }), 400
+
+        # Convert to JSON string to store in DB
+        missing_location_json = json.dumps(missing_location)
+
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
         cursor.execute("""
             UPDATE pets
-            SET is_missing = 1
+            SET is_missing = 1,
+                missing_location = ?
             WHERE id = ?
-        """, (pet_id,))
+        """, (missing_location_json, pet_id))
 
         conn.commit()
 
@@ -207,7 +235,65 @@ def mark_pet_missing(pet_id):
 
         return jsonify({
             "success": True,
-            "message": "Pet marked as missing"
+            "message": f"Pet {pet_id} marked as missing",
+            "missing_location": missing_location
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+    
+@app.route("/api/missing_pets", methods=["GET"])
+def load_missing_pets():
+    """
+    Returns a list of all pets that are marked as missing,
+    including their last known missing location, owner's email, and image.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Fetch pets where is_missing = 1, including owner's email and image blob
+        cursor.execute("""
+            SELECT pets.id, pets.type, pets.name, pets.age, pets.breed, pets.missing_location, pets.image, users.email
+            FROM pets
+            JOIN users ON pets.user_id = users.id
+            WHERE pets.is_missing = 1
+        """)
+        rows = cursor.fetchall()
+        conn.close()
+
+        missing_pets = []
+        for row in rows:
+            # Parse missing_location JSON string back to list
+            try:
+                location = json.loads(row[5]) if row[5] else None
+            except Exception:
+                location = None
+
+            # Convert image blob to base64 string (if present)
+            image_blob = row[6]
+            image_base64 = None
+            if image_blob:
+                image_base64 = base64.b64encode(image_blob).decode('utf-8')
+
+            pet_data = {
+                "id": row[0],
+                "type": row[1],
+                "name": row[2],
+                "age": row[3],
+                "breed": row[4],
+                "missing_location": location,
+                "image": image_base64,       # <-- base64 string
+                "owner_email": row[7]        # owner's email from users table
+            }
+            missing_pets.append(pet_data)
+
+        return jsonify({
+            "success": True,
+            "missing_pets": missing_pets
         }), 200
 
     except Exception as e:
@@ -216,6 +302,158 @@ def mark_pet_missing(pet_id):
             "message": str(e)
         }), 500
 
+@app.route("/api/pet/<int:pet_id>/found", methods=["POST"])
+def mark_pet_found(pet_id):
+    """
+    Mark a pet as found by setting is_missing = 0 and clearing missing_location.
+    """
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            UPDATE pets
+            SET is_missing = 0,
+                missing_location = NULL
+            WHERE id = ?
+        """, (pet_id,))
+
+        conn.commit()
+
+        if cursor.rowcount == 0:
+            conn.close()
+            return jsonify({
+                "success": False,
+                "message": "Pet not found"
+            }), 404
+
+        conn.close()
+        return jsonify({
+            "success": True,
+            "message": f"Pet {pet_id} has been marked as found"
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/api/check_image", methods=["POST"])
+def check_image():
+    """
+    Check uploaded image against all images in pet_images table.
+    If an exact match is found, return the pet_id.
+    """
+    try:
+        if "image" not in request.files:
+            return jsonify({
+                "success": False,
+                "message": "No image file provided"
+            }), 400
+
+        uploaded_file = request.files["image"]
+        uploaded_bytes = uploaded_file.read()
+
+        if not uploaded_bytes:
+            return jsonify({
+                "success": False,
+                "message": "Empty image file"
+            }), 400
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT id, image
+            FROM pets
+        """)
+
+        rows = cursor.fetchall()
+        conn.close()
+
+        # Compare uploaded image with each stored image
+        for pet_id, stored_blob in rows:
+            if stored_blob == uploaded_bytes:
+                return jsonify({
+                    "success": True,
+                    "match": True,
+                    "pet_id": pet_id
+                }), 200
+
+        # No match found
+        return jsonify({
+            "success": True,
+            "match": False
+        }), 200
+
+    except Exception as e:
+        return jsonify({
+            "success": False,
+            "message": str(e)
+        }), 500
+
+
+@app.route("/api/send_email", methods=["POST"])
+def api_send_email():
+    data = request.json
+    name = data.get("name", "").strip()
+    email = data.get("email", "").strip()
+    address = data.get("address", "").strip()
+    pet_id = data.get("pet_id")
+
+    if not all([name, email, address, pet_id]):
+        return jsonify({"success": False, "message": "All fields are required"}), 400
+
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+
+        # Get pet info
+        cursor.execute("SELECT name, user_id FROM pets WHERE id = ?", (pet_id,))
+        pet_row = cursor.fetchone()
+        if not pet_row:
+            conn.close()
+            return jsonify({"success": False, "message": "Pet not found"}), 404
+        pet_name, owner_id = pet_row
+
+        # Get owner info
+        cursor.execute("SELECT username, email FROM users WHERE id = ?", (owner_id,))
+        owner_row = cursor.fetchone()
+        if not owner_row:
+            conn.close()
+            return jsonify({"success": False, "message": "Owner not found"}), 404
+        owner_name, owner_email = owner_row
+
+        conn.close()
+
+        # Prepare email content
+        subject = f"Your pet {pet_name} has been found!"
+        body = f"""
+Hello {owner_name},
+
+Good news! Your pet, {pet_name}, has been found.
+
+Finder's Name: {name}
+Finder's Email: {email}
+Finder's Address: {address}
+
+Please contact the finder to recover your pet.
+
+Best regards,
+Pet Finder App
+"""
+
+        # Send email
+        success, msg = send_email(owner_email, subject, body)
+        if not success:
+            return jsonify({"success": False, "message": f"Failed to send email: {msg}"}), 500
+
+        return jsonify({"success": True, "message": "Email sent to pet owner successfully"})
+
+    except Exception as e:
+        return jsonify({"success": False, "message": str(e)}), 500
 # --- Run app ---
 if __name__ == '__main__':
     app.run(host="0.0.0.0", port=5000, debug=True)

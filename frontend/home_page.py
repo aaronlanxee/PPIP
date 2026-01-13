@@ -1,4 +1,4 @@
-import sys
+import sys, folium, tempfile
 from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QHBoxLayout,
@@ -6,9 +6,11 @@ from PySide6.QtWidgets import (
     QTabWidget, QScrollArea, QFrame
 )
 
+from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtCore import Qt, QSize
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from login_page import LoginPage
+from neighborhood_tab import NeighborhoodMapWidget
 
 import requests
 BACKEND_URL = "http://127.0.0.1:5000/"
@@ -16,12 +18,16 @@ BACKEND_URL = "http://127.0.0.1:5000/"
 BASE_DIR = Path(__file__).resolve().parent
 
 class HomePage(QWidget):
-    def __init__(self, go_to_login, go_to_add_pet, go_to_add_missing_page):
+    def __init__(self, go_to_login, go_to_add_pet, go_to_add_missing_page, go_to_missing_page, go_to_found_pet_page):
         super().__init__()
         self.log_out = go_to_login
         self.user_id = None
         self.add_pet = go_to_add_pet
         self.go_to_add_missing_page = go_to_add_missing_page
+        self.go_to_missing_page = go_to_missing_page
+        self.go_to_found_pet_page = go_to_found_pet_page
+
+        
 
         # ===== Main Layout =====
         main_layout = QVBoxLayout(self)
@@ -175,6 +181,7 @@ class HomePage(QWidget):
         btn_found.setFixedWidth(220)
 
         btn_loss.clicked.connect(self.go_to_add_missing_page)
+        btn_found.clicked.connect(self.go_to_found_pet_page)
         # Add buttons (left aligned)
         second_row_layout.addWidget(btn_found)
         second_row_layout.addWidget(btn_loss)
@@ -225,7 +232,7 @@ class HomePage(QWidget):
         pets_bottom_layout.setAlignment(Qt.AlignmentFlag.AlignLeft)
 
         # ===== Buttons =====
-        btn_view_missing = QPushButton("View My Missing Pet")
+        btn_view_missing = QPushButton("My Missing Pet")
         btn_add_pet = QPushButton("Add Pet")
 
         button_style = """
@@ -254,12 +261,15 @@ class HomePage(QWidget):
         btn_view_missing.setFixedWidth(240)
         btn_add_pet.setFixedWidth(160)
         btn_add_pet.clicked.connect(self.add_pet)
-
+        btn_view_missing.clicked.connect(self.go_to_missing_page)
         pets_bottom_layout.addWidget(btn_view_missing)
         pets_bottom_layout.addWidget(btn_add_pet)
 
         # Stretch factor 1 → smaller row
         pets_layout.addWidget(pets_bottom_row, 1)
+
+        # ===== Neighborhood Tab =====
+        neighborhood_tab = NeighborhoodMapWidget()
         # ===== Profile Tab =====
         profile_tab = QWidget()
         profile_layout = QVBoxLayout(profile_tab)
@@ -347,7 +357,12 @@ class HomePage(QWidget):
         # ===== Add Tabs =====
         tabs.addTab(home_tab, "Home")
         tabs.addTab(pets_tab, "Pets")
+        tabs.addTab(neighborhood_tab, "Neighborhood")
         tabs.addTab(profile_tab, "Profile")   
+        tabs.currentChanged.connect(
+            lambda index: neighborhood_tab.load_map() if index == 2 else None
+        )
+
 
         main_layout.addWidget(tabs)
 
@@ -484,3 +499,12 @@ class HomePage(QWidget):
             self.current_user_data = None
             self.current_user_id = None
             return None
+
+    def delete_captured_image(self):
+        capture_path = Path("../assets/captured_images/capture.jpg")
+        if capture_path.exists():
+            try:
+                capture_path.unlink()
+            except Exception as e:
+                print(f"Failed to delete captured image: {e}")
+

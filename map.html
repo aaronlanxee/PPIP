@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Missing Pets Map</title>
+
+    <!-- Local Leaflet -->
+    <link rel="stylesheet" href="assets/leaflet/dist/leaflet.css"/>
+    <script src="assets/leaflet/dist/leaflet.js"></script>
+
+    <!-- Qt WebChannel -->
+    <script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+
+    <style>
+        html, body, #map {
+            height: 100%;
+            margin: 0;
+        }
+
+        /* Circle image for pins */
+        .pet-marker {
+            width: 50px;
+            height: 50px;
+            border-radius: 50%;       /* circle */
+            border: 3px solid red;    /* red border */
+            object-fit: cover;        /* crop to fill square */
+            display: block;
+        }
+
+        /* Popup card */
+        .popup-card {
+            width: 200px;
+            font-family: Arial, sans-serif;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 2px 6px rgba(0,0,0,0.3);
+        }
+        .popup-card img {
+            width: 100%;
+            height: 120px;
+            object-fit: cover;
+        }
+        .popup-card .info {
+            padding: 8px;
+        }
+        .popup-card .info b {
+            color: #d32f2f;
+        }
+    </style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+new QWebChannel(qt.webChannelTransport, function(channel) {
+    const bridge = channel.objects.bridge;
+
+    bridge.getMissingPets().then(petsJson => {
+        const missingPets = JSON.parse(petsJson);
+
+        const map = L.map("map").setView([14.5995, 120.9842], 12);
+        L.tileLayer("https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 19 }).addTo(map);
+
+        missingPets.forEach(pet => {
+            if (!pet.missing_location) return;
+            const [lat, lng] = pet.missing_location;
+
+            // Popup HTML with card design
+            const popupText = `
+                <div class="popup-card">
+                    ${pet.image ? `<img src="data:image/png;base64,${pet.image}"/>` : ""}
+                    <div class="info">
+                        <b>${pet.name}</b><br>
+                        Type: ${pet.type}<br>
+                        Breed: ${pet.breed}<br>
+                        Age: ${pet.age}<br>
+                        Owner: ${pet.owner_email}
+                    </div>
+                </div>
+            `;
+
+            // Custom circular icon using square img + CSS
+            let iconHtml;
+            if (pet.image && pet.image.length > 0) {
+                iconHtml = `<img class="pet-marker" src="data:image/png;base64,${pet.image}" />`;
+            } else {
+                iconHtml = `<div class="pet-marker" style="background-color:red"></div>`;
+            }
+
+            const petIcon = L.divIcon({
+                html: iconHtml,
+                className: '',  // remove default Leaflet styles
+                iconSize: [50, 50],
+                iconAnchor: [25, 50],
+                popupAnchor: [0, -55]
+            });
+
+            L.marker([lat, lng], {icon: petIcon})
+                .addTo(map)
+                .bindPopup(popupText);
+        });
+    });
+});
+</script>
+</body>
+</html>

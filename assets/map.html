@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Interactive Map</title>
+<link rel="stylesheet" href="leaflet/dist/leaflet.css"/>
+<script src="leaflet/dist/leaflet.js"></script>
+<script src="qrc:///qtwebchannel/qwebchannel.js"></script>
+<style>
+    html, body {height: 100%; margin: 0;}
+    #map {height: 100%; width: 100%;}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<script>
+    // Initialize map
+    var map = L.map('map').setView([14.5995, 120.9842], 12);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '© OpenStreetMap contributors'
+    }).addTo(map);
+
+    var marker = null;
+
+    // Setup bridge
+    new QWebChannel(qt.webChannelTransport, function(channel){
+        window.bridge = channel.objects.bridge;
+    });
+
+    // Click to add marker
+    map.on('click', function(e){
+        if(marker) {
+            map.removeLayer(marker);
+        }
+        marker = L.marker(e.latlng).addTo(map)
+                 .openPopup();
+
+        // Send coordinates to Python
+        if(window.bridge){
+            window.bridge.pinClicked(e.latlng.lat, e.latlng.lng);
+        }
+    });
+</script>
+</body>
+</html>

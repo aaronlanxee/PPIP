@@ -3,12 +3,39 @@ import sqlite3
 import smtplib
 from email.message import EmailMessage
 from pathlib import Path
+from email.mime.multipart import MIMEMultipart
+from email.mime.text import MIMEText
 
 DB_PATH = Path(__file__).parent / "ppip.db"
 # --- Helper functions ---
 def hash_password(password: str) -> str:
     """Return SHA-256 hash of password"""
     return hashlib.sha256(password.encode()).hexdigest()
+
+def send_email(to_email, subject, body):
+    # --- Example using SMTP Gmail ---
+    SMTP_SERVER = "smtp.gmail.com"
+    SMTP_PORT = 587
+    SMTP_USER = "flores.a.bscs@gmail.com"        # replace with your sender email
+    SMTP_PASS = "lbyo bsuf cztj cpkg"           # use App password if Gmail
+
+    msg = MIMEMultipart()
+    msg["From"] = SMTP_USER
+    msg["To"] = to_email
+    msg["Subject"] = subject
+
+    msg.attach(MIMEText(body, "plain"))
+
+    try:
+        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
+        server.starttls()
+        server.login(SMTP_USER, SMTP_PASS)
+        server.send_message(msg)
+        server.quit()
+        return True, "Email sent successfully"
+    except Exception as e:
+        return False, str(e)
+    
 
 def get_user_by_username(username: str):
     conn = sqlite3.connect(DB_PATH)

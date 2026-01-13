@@ -2,7 +2,6 @@ from PySide6.QtWidgets import (
     QWidget, QLabel, QVBoxLayout, QHBoxLayout,
     QScrollArea, QFrame, QPushButton
 )
-
 from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QFont, QPixmap, QPainter, QPainterPath
@@ -13,9 +12,10 @@ BASE_DIR = Path(__file__).resolve().parent
 
 
 class MarkAsLostPage(QWidget):
-    def __init__(self, go_back):
+    def __init__(self, go_back, go_to_map):
         super().__init__()
         self.go_back = go_back
+        self.go_to_map = go_to_map  # callback to open the MapWidget
         self.user_id = None
 
         main_layout = QVBoxLayout(self)
@@ -58,37 +58,27 @@ class MarkAsLostPage(QWidget):
         self.title_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
         self.scroll_layout.addWidget(self.title_label)
-
         self.scroll_area.setWidget(self.scroll_content)
-
-        # ===== Message (hidden initially) =====
-        self.message_label = QLabel(
-            "We're sorry to know that.\nWe will notify you when someone finds him/her."
-        )
-        self.message_label.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
-        self.message_label.setStyleSheet("color: #2563eb;")
-        self.message_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.message_label.hide()
-
-
-        self.scroll_layout.addWidget(self.message_label)
 
     # --------------------------------------------------
     def load_user(self, user_id):
         self.user_id = user_id
 
+        # Clear existing cards
         for i in reversed(range(self.scroll_layout.count())):
             widget = self.scroll_layout.itemAt(i).widget()
             if widget:
                 widget.setParent(None)
 
         self.scroll_layout.addWidget(self.title_label)
-        self.scroll_layout.addWidget(self.message_label)
-        self.message_label.hide()
 
-
-        response = requests.get(f"{BACKEND_URL}api/user/{user_id}")
-        data = response.json()
+        # Load pets from backend
+        try:
+            response = requests.get(f"{BACKEND_URL}api/user/{user_id}")
+            data = response.json()
+        except Exception as e:
+            print(f"Error fetching user: {e}")
+            return
 
         if response.status_code != 200 or not data.get("success"):
             return
@@ -153,7 +143,6 @@ class MarkAsLostPage(QWidget):
         )
         painter.drawPixmap(0, 0, pixmap)
         painter.end()
-
         pet_image.setPixmap(rounded)
 
         # ===== Info =====
@@ -162,11 +151,9 @@ class MarkAsLostPage(QWidget):
 
         name = QLabel(f"Name: {pet['name']}")
         name.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
-
         pet_type = QLabel(f"Type: {pet['type']}")
         age = QLabel(f"Age: {pet['age']} years")
         breed = QLabel(f"Breed: {pet['breed']}")
-
         for lbl in (pet_type, age, breed):
             lbl.setFont(QFont("Segoe UI", 12))
             lbl.setStyleSheet("color: #374151;")
@@ -179,7 +166,7 @@ class MarkAsLostPage(QWidget):
         top_layout.addWidget(pet_image)
         top_layout.addLayout(info_layout)
 
-        # ===== Mark as Missing Button (FULL WIDTH, CENTERED) =====
+        # ===== Mark as Missing → Open Map =====
         mark_missing_btn = QPushButton("Mark as Missing")
         mark_missing_btn.setFixedHeight(45)
         mark_missing_btn.setStyleSheet("""
@@ -194,32 +181,12 @@ class MarkAsLostPage(QWidget):
                 background-color: #b91c1c;
             }
         """)
-        mark_missing_btn.clicked.connect(lambda checked, id=pet['id']: self._show_missing_message(id))
+        mark_missing_btn.clicked.connect(lambda checked, id=pet['id']: self._show_map(id))
 
         card_layout.addLayout(top_layout)
-        card_layout.addWidget(mark_missing_btn)  # full width automatically
-
+        card_layout.addWidget(mark_missing_btn)
         return pet_card
 
     # --------------------------------------------------
-    def _show_missing_message(self, pet_id):
-        # Hide all cards
-        for i in range(self.scroll_layout.count()):
-            widget = self.scroll_layout.itemAt(i).widget()
-            if widget and widget is not self.message_label:
-                widget.hide()
-
-        # Center the message
-        self.scroll_layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.message_label.show()
-
-        # --- Send POST request to mark pet as missing ---
-        try:
-            response = requests.post(f"{BACKEND_URL}api/pet/{pet_id}/mark_missing", timeout=5)
-            data = response.json()
-            if response.status_code == 200 and data.get("success"):
-                print(f"Pet {pet_id} marked as missing successfully.")
-            else:
-                print(f"Failed to mark pet {pet_id} as missing: {data.get('message')}")
-        except Exception as e:
-            print(f"Error marking pet {pet_id} as missing: {e}")
+    def _show_map(self, pet_id):
+        self.go_to_map(pet_id)
