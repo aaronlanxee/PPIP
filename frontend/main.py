@@ -10,7 +10,6 @@ from PySide6.QtGui import QIcon
 from login_page import LoginPage
 from home_page import HomePage
 from register_page import RegisterPage
-from otp_page import OTPVerificationPage
 from add_pet_page import AddPetPage
 from mark_as_loss_page import MarkAsLostPage
 from camera_page import CameraPage
@@ -34,11 +33,10 @@ class MainWindow(QWidget):
         self.move(self.screen().geometry().center() - self.rect().center())
         self.stack = QStackedWidget(self)
 
-        self.current_user_id = None
+        self.current_user_id = 1
 
         # Create pages
-        self.otp_page = OTPVerificationPage(self.go_to_home, self.go_to_login)
-        self.login_page = LoginPage(self.go_to_otp, self.go_to_register)
+        self.login_page = LoginPage(self.go_to_home, self.go_to_register)
         self.home_page = HomePage(self.go_to_login, go_to_add_pet=self.go_to_add_pet, go_to_add_missing_page=self.go_to_mark_loss, go_to_missing_page=self.go_to_missing_page, go_to_found_pet_page=self.go_to_found_pet_page)
         self.register_page = RegisterPage(self.go_to_login)
         self.add_pet_page = AddPetPage(self. go_to_home, go_to_camera=self.go_to_camera)
@@ -53,7 +51,6 @@ class MainWindow(QWidget):
         self.stack.addWidget(self.login_page)
         self.stack.addWidget(self.home_page)
         self.stack.addWidget(self.register_page)
-        self.stack.addWidget(self.otp_page)
         self.stack.addWidget(self.add_pet_page)
         self.stack.addWidget(self.mark_as_loss_page)
         self.stack.addWidget(self.camera_page)
@@ -77,14 +74,11 @@ class MainWindow(QWidget):
     def go_to_register(self):
         self.stack.setCurrentWidget(self.register_page)
 
-    def go_to_home(self):
+    def go_to_home(self, username=None, user_id=None):
+        if user_id:
+            self.current_user_id = user_id
         self.home_page.load_user(self.current_user_id)
         self.stack.setCurrentWidget(self.home_page)
-
-    def go_to_otp(self, username=None, user_id=None):
-        self.otp_page.set_username(username)
-        self.current_user_id = user_id
-        self.stack.setCurrentWidget(self.otp_page)
     
     def go_to_add_pet(self):
         self.add_pet_page.load_captured_image()
@@ -98,6 +92,7 @@ class MainWindow(QWidget):
         self.stack.setCurrentWidget(self.camera_page)
     
     def go_to_map(self, pet_id=None):
+        self.map_page.reset()
         self.map_page.pet_id = pet_id
         self.stack.setCurrentWidget(self.map_page)
 

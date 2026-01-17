@@ -5,7 +5,8 @@ from PySide6.QtGui import QPixmap, QFont
 from PySide6.QtCore import Qt
 
 BASE_DIR = Path(__file__).resolve().parent
-BACKEND_URL = "http://127.0.0.1:5000/"
+BACKEND_URL = "http://127.0.0.1:5000"
+
 
 class OTPVerificationPage(QWidget):
     def __init__(self, on_otp_success, go_back):

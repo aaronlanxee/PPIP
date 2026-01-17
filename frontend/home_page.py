@@ -3,19 +3,137 @@ from pathlib import Path
 from PySide6.QtWidgets import (
     QApplication, QWidget, QLabel, QLineEdit, QHBoxLayout,
     QPushButton, QVBoxLayout, QStackedWidget, QBoxLayout,
-    QTabWidget, QScrollArea, QFrame
+    QTabWidget, QScrollArea, QFrame, QDialog
 )
 
 from PySide6.QtWebEngineWidgets import QWebEngineView
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, QTimer
 from PySide6.QtGui import QFont, QIcon, QPixmap, QPainter, QPainterPath
 from login_page import LoginPage
 from neighborhood_tab import NeighborhoodMapWidget
+from socket_client import SocketClient
 
 import requests
 BACKEND_URL = "http://127.0.0.1:5000/"
 
 BASE_DIR = Path(__file__).resolve().parent
+
+# ===== Floating Notification Dialog =====
+class FloatingNotification(QWidget):
+    def __init__(self, pet_data, parent=None):
+        super().__init__(parent)
+        self.pet_data = pet_data
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        # Set to full width
+        if parent:
+            self.setGeometry(0, 0, parent.width(), 80)
+        
+        # Main container
+        container = QFrame()
+        container.setStyleSheet("""
+            QFrame {
+                background-color: rgba(239, 68, 68, 128);
+                border: none;
+                padding: 0px;
+            }
+        """)
+        
+        layout = QVBoxLayout(container)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Message text
+        message = QLabel("🚨 New Missing Pet!")
+        message.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        message.setStyleSheet("color: white;")
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(message)
+        
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(container)
+        
+        # Fade out animation
+        self.opacity = 1.0
+        self.fade_timer = QTimer()
+        self.fade_timer.timeout.connect(self._fade_out)
+        self.fade_timer.start(50)  # Update every 50ms
+        self.fade_duration = 3000  # 3 seconds in milliseconds
+        self.elapsed_time = 0
+        
+    def _fade_out(self):
+        self.elapsed_time += 50
+        
+        if self.elapsed_time >= self.fade_duration:
+            self.fade_timer.stop()
+            self.close()
+            return
+        
+        # Calculate opacity (fade from 1.0 to 0.0)
+        self.opacity = 1.0 - (self.elapsed_time / self.fade_duration)
+        self.setWindowOpacity(self.opacity)
+
+
+# ===== Floating Notification Dialog for Found Pet =====
+class FloatingFoundNotification(QWidget):
+    def __init__(self, pet_data, parent=None):
+        super().__init__(parent)
+        self.pet_data = pet_data
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint)
+        self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
+        
+        # Set to full width
+        if parent:
+            self.setGeometry(0, 0, parent.width(), 80)
+        
+        # Main container with green background
+        container = QFrame()
+        container.setStyleSheet("""
+            QFrame {
+                background-color: rgba(34, 197, 94, 128);
+                border: none;
+                padding: 0px;
+            }
+        """)
+        
+        layout = QVBoxLayout(container)
+        layout.setSpacing(0)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        
+        # Message text
+        message = QLabel("🎉 Great news! Your pet has been found!")
+        message.setFont(QFont("Segoe UI", 16, QFont.Weight.Bold))
+        message.setStyleSheet("color: white;")
+        message.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(message)
+        
+        main_layout = QVBoxLayout(self)
+        main_layout.setContentsMargins(0, 0, 0, 0)
+        main_layout.addWidget(container)
+        
+        # Fade out animation
+        self.opacity = 1.0
+        self.fade_timer = QTimer()
+        self.fade_timer.timeout.connect(self._fade_out)
+        self.fade_timer.start(50)  # Update every 50ms
+        self.fade_duration = 3000  # 3 seconds in milliseconds
+        self.elapsed_time = 0
+        
+    def _fade_out(self):
+        self.elapsed_time += 50
+        
+        if self.elapsed_time >= self.fade_duration:
+            self.fade_timer.stop()
+            self.close()
+            return
+        
+        # Calculate opacity (fade from 1.0 to 0.0)
+        self.opacity = 1.0 - (self.elapsed_time / self.fade_duration)
+        self.setWindowOpacity(self.opacity)
 
 class HomePage(QWidget):
     def __init__(self, go_to_login, go_to_add_pet, go_to_add_missing_page, go_to_missing_page, go_to_found_pet_page):
@@ -26,6 +144,11 @@ class HomePage(QWidget):
         self.go_to_add_missing_page = go_to_add_missing_page
         self.go_to_missing_page = go_to_missing_page
         self.go_to_found_pet_page = go_to_found_pet_page
+        
+        # Initialize WebSocket client
+        self.socket_client = SocketClient(BACKEND_URL)
+        self.socket_client.pet_missing_signal.connect(self.on_pet_missing_notification)
+        self.socket_client.pet_found_signal.connect(self.on_pet_found_notification)
 
         
 
@@ -277,6 +400,36 @@ class HomePage(QWidget):
         profile_layout.setContentsMargins(50, 30, 50, 30)
         profile_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignHCenter)
 
+        # ===== Notifications Tab =====
+        notifications_tab = QWidget()
+        notifications_layout = QVBoxLayout(notifications_tab)
+        notifications_layout.setContentsMargins(20, 20, 20, 20)
+        notifications_layout.setSpacing(15)
+        notifications_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+
+        # Title
+        notif_title = QLabel("Notifications")
+        notif_title.setFont(QFont("Segoe UI", 18, QFont.Weight.Bold))
+        notif_title.setStyleSheet("color: #0d53bb;")
+        notif_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        notifications_layout.addWidget(notif_title)
+
+        # Scroll area for notifications
+        notif_scroll = QScrollArea()
+        notif_scroll.setWidgetResizable(True)
+        notif_scroll.setFrameShape(QFrame.Shape.NoFrame)
+
+        notif_content = QWidget()
+        notif_content_layout = QVBoxLayout(notif_content)
+        notif_content_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        notif_content_layout.setSpacing(12)
+
+        self.notif_content_layout = notif_content_layout  # save for later updates
+
+        notif_scroll.setWidget(notif_content)
+        notifications_layout.addWidget(notif_scroll)
+
         # -------- Profile Picture --------
         self.profile_pic = QLabel()
         self.profile_pic.setFixedSize(140, 140)
@@ -358,6 +511,7 @@ class HomePage(QWidget):
         tabs.addTab(home_tab, "Home")
         tabs.addTab(pets_tab, "Pets")
         tabs.addTab(neighborhood_tab, "Neighborhood")
+        tabs.addTab(notifications_tab, "Notifications")
         tabs.addTab(profile_tab, "Profile")   
         tabs.currentChanged.connect(
             lambda index: neighborhood_tab.load_map() if index == 2 else None
@@ -366,9 +520,151 @@ class HomePage(QWidget):
 
         main_layout.addWidget(tabs)
 
+    def on_pet_missing_notification(self, notification_data):
+        """
+        Called when a pet missing notification is received via WebSocket.
+        Displays the pet info as a card in the notifications tab and shows floating notification.
+        """
+        try:
+            pet = notification_data
+            
+            # Show floating notification at the top of the screen
+            floating_notif = FloatingNotification(pet, parent=self)
+            floating_notif.move(0, 60)  # Position below the navbar
+            floating_notif.show()
+            
+            pet_card = QFrame()
+            pet_card.setFixedWidth(600)
+            pet_card.setStyleSheet("""
+                QFrame {
+                    background-color: white;
+                    border-radius: 10px;
+                    border: 1px solid #ff6b6b;
+                    padding: 5px;
+                }
+            """)
+
+            card_layout = QHBoxLayout(pet_card)
+            card_layout.setContentsMargins(20, 20, 20, 20)
+            card_layout.setSpacing(20)
+
+            # --- Pet Image ---
+            pet_image = QLabel()
+            pet_image.setFixedSize(120, 120)
+            pet_image.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+            pet_image.setStyleSheet("""
+                QLabel {
+                    background-color: #f0f0f0;
+                    border-radius: 10px;
+                }
+            """)
+
+            # Use pet image from notification if exists
+            if pet.get("image"):
+                from base64 import b64decode
+                from PySide6.QtCore import QByteArray
+
+                img_bytes = b64decode(pet["image"])
+                pixmap = QPixmap()
+                pixmap.loadFromData(QByteArray(img_bytes))
+            else:
+                pixmap = QPixmap(str(BASE_DIR / ".." / "assets" / "default_pet.png"))
+
+            # --- Make circular pixmap ---
+            size = 120
+            rounded = QPixmap(size, size)
+            rounded.fill(Qt.GlobalColor.transparent)
+
+            painter = QPainter(rounded)
+            painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+            path = QPainterPath()
+            path.addEllipse(0, 0, size, size)
+            painter.setClipPath(path)
+
+            pixmap = pixmap.scaled(
+                size, size,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
+                Qt.TransformationMode.SmoothTransformation
+            )
+
+            painter.drawPixmap(0, 0, pixmap)
+            painter.end()
+
+            pet_image.setPixmap(rounded)
+
+            # --- Info Layout ---
+            info_layout = QVBoxLayout()
+            info_layout.setSpacing(8)
+
+            # Add "Missing!" badge
+            missing_badge = QLabel("🚨 MISSING PET ALERT")
+            missing_badge.setFont(QFont("Segoe UI", 10, QFont.Weight.Bold))
+            missing_badge.setStyleSheet("color: #ff6b6b;")
+
+            pet_name = QLabel(f"Name: {pet.get('name', 'Unknown')}")
+            pet_name.setFont(QFont("Segoe UI", 14, QFont.Weight.Bold))
+
+            pet_type = QLabel(f"Type: {pet.get('type', 'Unknown')}")
+            pet_age = QLabel(f"Age: {pet.get('age', 'Unknown')} years")
+            pet_breed = QLabel(f"Breed: {pet.get('breed', 'Unknown')}")
+
+            for label in (pet_type, pet_age, pet_breed):
+                label.setFont(QFont("Segoe UI", 11))
+                label.setStyleSheet("color: #374151;")
+
+            info_layout.addWidget(missing_badge)
+            info_layout.addWidget(pet_name)
+            info_layout.addWidget(pet_type)
+            info_layout.addWidget(pet_age)
+            info_layout.addWidget(pet_breed)
+            
+            # Add location info if available
+            if pet.get("missing_location"):
+                location_text = f"Location: {pet['missing_location'][0]:.4f}, {pet['missing_location'][1]:.4f}"
+                location_label = QLabel(location_text)
+                location_label.setFont(QFont("Segoe UI", 10))
+                location_label.setStyleSheet("color: #dc2626;")
+                info_layout.addWidget(location_label)
+            
+            info_layout.addStretch()
+
+            # --- Add image and info to card ---
+            card_layout.addWidget(pet_image, alignment=Qt.AlignmentFlag.AlignTop)
+            card_layout.addLayout(info_layout)
+
+            # --- Add card to notifications layout ---
+            self.notif_content_layout.insertWidget(0, pet_card)  # Add to top
+            
+            print(f"✓ Added notification for pet: {pet.get('name')}")
+
+        except Exception as e:
+            print(f"Error displaying pet notification: {e}")
+
+    def on_pet_found_notification(self, notification_data):
+        """
+        Called when a pet found notification is received via WebSocket.
+        Display a success notification to the owner.
+        """
+        try:
+            pet = notification_data
+            message = pet.get("message", "A pet has been found!")
+            
+            # Show floating notification in green
+            floating_notif = FloatingFoundNotification(pet, parent=self)
+            floating_notif.move(0, 60)  # Position below the navbar
+            floating_notif.show()
+            
+            print(f"✓ Pet found notification received: {message}")
+            
+        except Exception as e:
+            print(f"Error displaying pet found notification: {e}")
+
+
     def load_user(self, user_id):
         """
         Load user info and pets from backend and populate the profile and pets tab.
+        Connect to WebSocket for real-time notifications.
         """
         try:
             response = requests.get(f"{BACKEND_URL}api/user/{user_id}", timeout=5)
@@ -380,6 +676,10 @@ class HomePage(QWidget):
                 self.profile_username.setText(self.current_user_data["username"])
                 self.profile_email.setText(self.current_user_data["email"])
                 print(f"Loaded user: {self.current_user_data}")
+                
+                # Connect to WebSocket server with user_id
+                if not self.socket_client.connected:
+                    self.socket_client.connect(user_id=self.user_id)
 
                 for i in reversed(range(self.scroll_layout.count())):
                     widget = self.scroll_layout.itemAt(i).widget()
@@ -418,12 +718,11 @@ class HomePage(QWidget):
                         # Use pet image from backend if exists
                         if pet.get("image"):
                             from base64 import b64decode
-                            import io
-                            from PySide6.QtGui import QImage
+                            from PySide6.QtCore import QByteArray
 
-                            img_bytes = bytes.fromhex(pet["image"])
-                            image = QImage.fromData(img_bytes)
-                            pixmap = QPixmap.fromImage(image)
+                            img_bytes = b64decode(pet["image"])
+                            pixmap = QPixmap()
+                            pixmap.loadFromData(QByteArray(img_bytes))
                         else:
                             pixmap = QPixmap(str(BASE_DIR / ".." / "assets" / "default_pet.png"))
 

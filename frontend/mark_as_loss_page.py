@@ -123,7 +123,8 @@ class MarkAsLostPage(QWidget):
         pixmap = QPixmap(str(BASE_DIR / ".." / "assets" / "default_pet.png"))
         if pet.get("image"):
             from PySide6.QtGui import QImage
-            image = QImage.fromData(bytes.fromhex(pet["image"]))
+            import base64
+            image = QImage.fromData(base64.b64decode(pet["image"]))
             pixmap = QPixmap.fromImage(image)
 
         size = 120

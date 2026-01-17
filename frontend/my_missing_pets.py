@@ -127,7 +127,7 @@ class MyMissingPetsPage(QWidget):
 
         # Load image from backend if exists
         if pet.get("image"):
-            img_bytes = bytes.fromhex(pet["image"])
+            img_bytes = b64decode(pet["image"])
             image = QImage.fromData(img_bytes)
             pixmap = QPixmap.fromImage(image)
         else:

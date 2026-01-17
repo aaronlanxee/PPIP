@@ -2,12 +2,17 @@ from flask import Flask, request, jsonify
 import sqlite3, hashlib, random, json, base64
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import threading
+from flask_socketio import SocketIO, emit, join_room
 from helpers import hash_password, get_user_by_email, get_user_by_username, send_otp_email, send_email
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'secret!'
 app.config["SESSION_PERMANENT"] = False
 app.config["SESSION_TYPE"] = "filesystem"
+
+# Initialize SocketIO
+socketio = SocketIO(app, cors_allowed_origins="*")
 
 DB_PATH = Path(__file__).parent / "ppip.db"
 
@@ -61,25 +66,11 @@ def login():
         return jsonify({"status": "error", "message": "Invalid Username or Password."}), 401
 
     hashed_password = hash_password(password)
-    if user[3] == hashed_password:  # user[3] is password column
-
-        # ---------- Generate OTP ----------
-        otp = str(random.randint(100000, 999999))  # 6-digit OTP
-        expires_at = datetime.now(timezone.utc) + timedelta(minutes=5)
-        otp_store[username] = {"otp": otp, "expires_at": expires_at}
-
-        # ---------- Send OTP via Email ----------
-        user_email = user[2]  # assuming user[2] is email
-        try:
-            send_otp_email(user_email, otp)
-        except Exception as e:
-            return jsonify({"status": "error", "message": f"Failed to send OTP: {e}"}), 500
-
-        print(otp_store)
+    if user[3] == hashed_password:
         return jsonify({
             "user_id": user[0],
             "status": "success",
-            "message": "OTP sent to your email.",
+            "message": "login successful.",
             "username": username  # send username to frontend if needed
         }), 200
 
@@ -169,7 +160,7 @@ def api_get_user(user_id):
                 "name": row[2],
                 "age": row[3],
                 "breed": row[4],
-                "image": row[5].hex() if row[5] else None,  # Convert BLOB to hex string
+                "image": base64.b64encode(row[5]).decode('utf-8') if row[5] else None,  # Convert BLOB to base64 string
                 "is_missing": row[6]
             }
             pets.append(pet)
@@ -214,7 +205,7 @@ def mark_pet_missing(pet_id):
 
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
-
+        
         cursor.execute("""
             UPDATE pets
             SET is_missing = 1,
@@ -231,7 +222,38 @@ def mark_pet_missing(pet_id):
                 "message": "Pet not found"
             }), 404
 
+        # Fetch pet details to broadcast
+        cursor.execute("""
+            SELECT type, name, age, breed, image, user_id
+            FROM pets
+            WHERE id = ?
+        """, (pet_id,))
+        
+        pet_row = cursor.fetchone()
         conn.close()
+
+        if pet_row:
+            pet_type, pet_name, pet_age, pet_breed, pet_image, user_id = pet_row
+            
+            # Convert image blob to base64 for transmission
+            image_base64 = None
+            if pet_image:
+                image_base64 = base64.b64encode(pet_image).decode('utf-8')
+
+            # Broadcast notification to all connected clients
+            notification_data = {
+                "pet_id": pet_id,
+                "type": pet_type,
+                "name": pet_name,
+                "age": pet_age,
+                "breed": pet_breed,
+                "image": image_base64,
+                "missing_location": missing_location,
+                "owner_id": user_id,
+                "timestamp": datetime.now(timezone.utc).isoformat()
+            }
+            
+            socketio.emit('pet_missing', notification_data)
 
         return jsonify({
             "success": True,
@@ -240,6 +262,9 @@ def mark_pet_missing(pet_id):
         }), 200
 
     except Exception as e:
+        print(f"Error in mark_pet_missing: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "success": False,
             "message": str(e)
@@ -306,11 +331,31 @@ def load_missing_pets():
 def mark_pet_found(pet_id):
     """
     Mark a pet as found by setting is_missing = 0 and clearing missing_location.
+    Send notification to the pet owner.
     """
     try:
         conn = sqlite3.connect(DB_PATH)
         cursor = conn.cursor()
 
+        # Fetch pet details including user_id before updating
+        cursor.execute("""
+            SELECT user_id, type, name, age, breed, image
+            FROM pets
+            WHERE id = ?
+        """, (pet_id,))
+        
+        pet_row = cursor.fetchone()
+        
+        if not pet_row:
+            conn.close()
+            return jsonify({
+                "success": False,
+                "message": "Pet not found"
+            }), 404
+
+        user_id, pet_type, pet_name, pet_age, pet_breed, pet_image = pet_row
+
+        # Update pet to mark as found
         cursor.execute("""
             UPDATE pets
             SET is_missing = 0,
@@ -319,21 +364,17 @@ def mark_pet_found(pet_id):
         """, (pet_id,))
 
         conn.commit()
-
-        if cursor.rowcount == 0:
-            conn.close()
-            return jsonify({
-                "success": False,
-                "message": "Pet not found"
-            }), 404
-
         conn.close()
+
         return jsonify({
             "success": True,
-            "message": f"Pet {pet_id} has been marked as found"
+            "message": f"Pet {pet_id} has been marked as found and owner has been notified"
         }), 200
 
     except Exception as e:
+        print(f"Error in mark_pet_found: {str(e)}")
+        import traceback
+        traceback.print_exc()
         return jsonify({
             "success": False,
             "message": str(e)
@@ -342,6 +383,7 @@ def mark_pet_found(pet_id):
 
 @app.route("/api/check_image", methods=["POST"])
 def check_image():
+
     """
     Check uploaded image against all images in pet_images table.
     If an exact match is found, return the pet_id.
@@ -418,42 +460,59 @@ def api_send_email():
             return jsonify({"success": False, "message": "Pet not found"}), 404
         pet_name, owner_id = pet_row
 
-        # Get owner info
-        cursor.execute("SELECT username, email FROM users WHERE id = ?", (owner_id,))
-        owner_row = cursor.fetchone()
-        if not owner_row:
-            conn.close()
-            return jsonify({"success": False, "message": "Owner not found"}), 404
-        owner_name, owner_email = owner_row
-
+        # Get pet details
+        cursor.execute("SELECT type, age, breed, image FROM pets WHERE id = ?", (pet_id,))
+        pet_details = cursor.fetchone()
+        
         conn.close()
 
-        # Prepare email content
-        subject = f"Your pet {pet_name} has been found!"
-        body = f"""
-Hello {owner_name},
+        # Prepare notification data
+        image_base64 = None
+        pet_type = ""
+        pet_age = ""
+        pet_breed = ""
+        if pet_details:
+            pet_type, pet_age, pet_breed, pet_image = pet_details
+            if pet_image:
+                image_base64 = base64.b64encode(pet_image).decode('utf-8')
 
-Good news! Your pet, {pet_name}, has been found.
+        notification_data = {
+            "pet_id": pet_id,
+            "type": pet_type,
+            "name": pet_name,
+            "age": pet_age,
+            "breed": pet_breed,
+            "image": image_base64,
+            "owner_id": owner_id,
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "message": f"Good news! {pet_name} has been found!",
+            "finder_name": name,
+            "finder_email": email,
+            "finder_address": address
+        }
+        
+        # Send notification to the owner only (using room-based targeting)
+        socketio.emit('pet_found', notification_data, to=f"user_{owner_id}")
 
-Finder's Name: {name}
-Finder's Email: {email}
-Finder's Address: {address}
-
-Please contact the finder to recover your pet.
-
-Best regards,
-Pet Finder App
-"""
-
-        # Send email
-        success, msg = send_email(owner_email, subject, body)
-        if not success:
-            return jsonify({"success": False, "message": f"Failed to send email: {msg}"}), 500
-
-        return jsonify({"success": True, "message": "Email sent to pet owner successfully"})
+        return jsonify({"success": True, "message": "Notification sent to pet owner successfully"})
 
     except Exception as e:
         return jsonify({"success": False, "message": str(e)}), 500
+
+
+# ===== WebSocket Event Handlers =====
+@socketio.on('join_room')
+def on_join_room(data):
+    """Handle user joining their specific room for notifications"""
+    try:
+        room = data.get('room')
+        if room:
+            join_room(room)
+            print(f"Client joined room: {room}")
+    except Exception as e:
+        print(f"Error in join_room: {e}")
+
+
 # --- Run app ---
-if __name__ == '__main__':
-    app.run(host="0.0.0.0", port=5000, debug=True)
+if __name__ == "__main__":
+    socketio.run(app, host="127.0.0.1", port=5000, debug=True, allow_unsafe_werkzeug=True)

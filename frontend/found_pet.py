@@ -295,7 +295,7 @@ class FoundPetPage(QWidget):
         self.status_label.setStyleSheet("color: #0d53bb;")
         self.status_label.setText("Sending info to pet owner...")
 
-        try:
+        try: 
             response = requests.post(
                 f"{BACKEND_URL}/api/send_email",
                 json={

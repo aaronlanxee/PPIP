@@ -265,7 +265,7 @@ class AddPetPage(QWidget):
                 self.error_label.setText("Pet registered successfully!")
                 
                 
-                QTimer.singleShot(2000, self.go_back)
+                self.go_back()
                 self.error_label.setText("")
             else:
                 self.error_label.setStyleSheet("color: red; font-size: 12px; font-weight: bold;")
@@ -276,7 +276,7 @@ class AddPetPage(QWidget):
             self.error_label.setText(f"Backend not reachable: {e}")
 
     def load_captured_image(self):
-        capture_path = Path(str(BASE_DIR / "captured_images" / "capture.jpg"))
+        capture_path = Path(str(BASE_DIR / ".." / "assets" / "captured_images" / "capture.jpg"))
         if capture_path.exists():
             self.image_path = str(capture_path)
 
@@ -291,7 +291,7 @@ class AddPetPage(QWidget):
             self.image_preview.setText("")
 
     def delete_captured_image(self):
-        capture_path = Path(str(BASE_DIR / "captured_images" / "capture.jpg"))
+        capture_path = Path(str(BASE_DIR / ".." / "assets" / "captured_images" / "capture.jpg"))
         if capture_path.exists():
             try:
                 capture_path.unlink()
